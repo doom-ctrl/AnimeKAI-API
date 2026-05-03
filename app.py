@@ -1,3 +1,4 @@
+import re
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import requests
@@ -469,6 +470,32 @@ def api_servers(ep_token):
 def api_source(link_id):
     res = resolve_source(link_id)
     return (jsonify(res), 500) if "error" in res else jsonify({"success": True, **res})
+
+@app.route("/api/proxy/m3u8", methods=["GET"])
+def proxy_m3u8():
+    url = request.args.get("url", "")
+    if not url:
+        return jsonify({"error": "URL required"}), 400
+    
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        content = resp.text
+        
+        # Rewrite relative segment URLs to absolute
+        base_url = url.rsplit("/", 1)[0]
+        def rewrite(line):
+            line = line.strip()
+            if line and not line.startswith("#") and not line.startswith("http"):
+                return f"{base_url}/{line}"
+            return line
+        content = "\n".join(rewrite(l) for l in content.splitlines())
+        
+        response = app.response_class(content, mimetype="application/vnd.apple.mpegurl")
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        return response
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
