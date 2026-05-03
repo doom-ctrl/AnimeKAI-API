@@ -485,20 +485,46 @@ def proxy_m3u8():
         # Rewrite relative URLs to proxy through us
         base_url = url.rsplit("/", 1)[0]
         proxy_base = request.host_url.rstrip("/") + "/api/proxy/m3u8"
+        seg_proxy = request.host_url.rstrip("/") + "/api/proxy/segment"
         
         def rewrite(line):
             stripped = line.strip()
             if not stripped or stripped.startswith("#"):
                 return line
             if stripped.startswith("http://") or stripped.startswith("https://"):
-                return f"{proxy_base}?url={requests.utils.quote(stripped, safe='')}"
-            # Relative URL - make absolute then proxy
-            abs_url = f"{base_url}/{stripped}" if not stripped.startswith("/") else f"{requests.utils.urlparse(base_url).scheme}://{requests.utils.urlparse(base_url).netloc}{stripped}"
-            return f"{proxy_base}?url={requests.utils.quote(abs_url, safe='')}"
+                abs_url = stripped
+            elif stripped.startswith("/"):
+                abs_url = f"{requests.utils.urlparse(base_url).scheme}://{requests.utils.urlparse(base_url).netloc}{stripped}"
+            else:
+                abs_url = f"{base_url}/{stripped}"
+            
+            # Use segment proxy for non-playlist files
+            if abs_url.endswith(".m3u8") or ".m3u8" in abs_url:
+                return f"{proxy_base}?url={requests.utils.quote(abs_url, safe='')}"
+            else:
+                return f"{seg_proxy}?url={requests.utils.quote(abs_url, safe='')}"
         
         content = "\n".join(rewrite(l) for l in content.splitlines())
         
         response = app.response_class(content, mimetype="application/vnd.apple.mpegurl")
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        return response
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/proxy/segment", methods=["GET"])
+def proxy_segment():
+    url = request.args.get("url", "")
+    if not url:
+        return jsonify({"error": "URL required"}), 400
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=30, stream=True)
+        resp.raise_for_status()
+        response = app.response_class(
+            resp.iter_content(chunk_size=8192),
+            status=resp.status_code,
+            mimetype="video/mp2t",  # force correct MIME for TS segments
+        )
         response.headers["Access-Control-Allow-Origin"] = "*"
         return response
     except Exception as e:
