@@ -482,16 +482,38 @@ def proxy_m3u8():
         resp.raise_for_status()
         content = resp.text
         
-        # Rewrite relative segment URLs to absolute
+        # Rewrite relative URLs to proxy through us
         base_url = url.rsplit("/", 1)[0]
+        proxy_base = request.host_url.rstrip("/") + "/api/proxy/m3u8"
+        
         def rewrite(line):
-            line = line.strip()
-            if line and not line.startswith("#") and not line.startswith("http"):
-                return f"{base_url}/{line}"
-            return line
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                return line
+            if stripped.startswith("http://") or stripped.startswith("https://"):
+                return f"{proxy_base}?url={requests.utils.quote(stripped, safe='')}"
+            # Relative URL - make absolute then proxy
+            abs_url = f"{base_url}/{stripped}" if not stripped.startswith("/") else f"{requests.utils.urlparse(base_url).scheme}://{requests.utils.urlparse(base_url).netloc}{stripped}"
+            return f"{proxy_base}?url={requests.utils.quote(abs_url, safe='')}"
+        
         content = "\n".join(rewrite(l) for l in content.splitlines())
         
         response = app.response_class(content, mimetype="application/vnd.apple.mpegurl")
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        return response
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/proxy/vtt", methods=["GET"])
+def proxy_vtt():
+    url = request.args.get("url", "")
+    if not url:
+        return jsonify({"error": "URL required"}), 400
+    
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        response = app.response_class(resp.text, mimetype="text/vtt")
         response.headers["Access-Control-Allow-Origin"] = "*"
         return response
     except Exception as e:
